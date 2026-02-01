@@ -16,87 +16,123 @@ public class OrdersController : ControllerBase
         _db = db;
     }
 
+
     [HttpPost]
-    public async Task<IActionResult> CreateOrder([FromBody] CreateOrderDto dto)
+    public async Task<IActionResult> CreatePayment([FromBody] CreatePaymentDto dto)
     {
-        if (string.IsNullOrWhiteSpace(dto.FullName))
-            return BadRequest("FullName is required.");
+        if (dto is null) return BadRequest("Body is required.");
+        if (dto.OrderId <= 0) return BadRequest("OrderId is required.");
+        if (dto.Amount <= 0) return BadRequest("Amount must be greater than 0.");
 
-        if (string.IsNullOrWhiteSpace(dto.Phone))
-            return BadRequest("Phone is required.");
+        // (Opcional pero recomendado) Validar método permitido
+        var allowedMethods = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "CASH", "NEQUI", "DAVIPLATA", "TRANSFER"
+    };
 
-        if (dto.Items == null || dto.Items.Count == 0)
-            return BadRequest("At least 1 item is required.");
+        var method = string.IsNullOrWhiteSpace(dto.Method) ? "CASH" : dto.Method.Trim().ToUpperInvariant();
+        if (!allowedMethods.Contains(method))
+            return BadRequest("Method must be one of: CASH, NEQUI, DAVIPLATA, TRANSFER.");
 
-        if (dto.Items.Any(i => i.Qty <= 0 || i.UnitPrice < 0 || string.IsNullOrWhiteSpace(i.Description)))
-            return BadRequest("Each item must have Description, Qty > 0 and UnitPrice >= 0.");
+        // Traer la orden (para actualizar status si se paga completo)
+        var order = await _db.Orders.FirstOrDefaultAsync(o => o.OrderId == dto.OrderId);
+        if (order is null)
+            return NotFound($"OrderId {dto.OrderId} not found.");
 
-        // 1) Buscar cliente por teléfono (tu sistema es WhatsApp-first)
-        var customer = await _db.Customers.FirstOrDefaultAsync(c => c.Phone == dto.Phone);
+        // Traer resumen para saber balance actual
+        var summaryBefore = await _db.vw_OrderSummary
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.OrderId == dto.OrderId);
 
-        // 2) Si no existe, crearlo
-        if (customer == null)
+        if (summaryBefore is null)
+            return BadRequest("Order summary not found. Ensure vw_OrderSummary exists.");
+
+        if (dto.Amount > summaryBefore.Balance)
+            return BadRequest($"Amount cannot exceed current balance ({summaryBefore.Balance}).");
+
+        if (string.Equals(order.Status, "CLOSED", StringComparison.OrdinalIgnoreCase))
+            return BadRequest("Order is CLOSED. No more payments allowed.");
+
+        // Crear pago
+        var payment = new Payments
         {
-            customer = new Customers
-            {
-                FullName = dto.FullName,
-                Phone = dto.Phone,
-                Notes = null,
-                CreatedAt = DateTime.Now
-            };
-
-            _db.Customers.Add(customer);
-            await _db.SaveChangesAsync(); // para obtener CustomerId
-        }
-
-        // 3) Crear el pedido
-        var order = new Orders
-        {
-            CustomerId = customer.CustomerId,
-            CreatedAt = DateTime.Now,
-            Status = "NEW",
-            DeliveryType = dto.DeliveryType ?? "PICKUP",
-            TotalAmount = 0m
+            OrderId = dto.OrderId,
+            Amount = dto.Amount,
+            Method = method,
+            Reference = dto.Reference?.Trim(),
+            Notes = dto.Notes?.Trim(),
+            PaidAt = dto.PaidAt ?? DateTime.UtcNow
         };
 
-        _db.Orders.Add(order);
-        await _db.SaveChangesAsync(); // para obtener OrderId
-
-        // 4) Crear items y calcular total
-        decimal total = 0m;
-
-        foreach (var item in dto.Items)
-        {
-            var lineTotal = item.Qty * item.UnitPrice;
-            total += lineTotal;
-
-            var orderItem = new OrderItems
-            {
-                OrderId = order.OrderId,
-                ProductId = null,
-                Description = item.Description,
-                Qty = item.Qty,
-                UnitPrice = item.UnitPrice,
-                LineTotal = lineTotal,
-                Notes = item.Notes
-            };
-
-            _db.OrderItems.Add(orderItem);
-        }
-
-        // 5) Guardar total en la orden
-        order.TotalAmount = total;
-
+        _db.Payments.Add(payment);
         await _db.SaveChangesAsync();
 
-        // 6) Respuesta útil: OrderId + link de consulta
-        return Ok(new
+        // ---- AUTO-CLOSE (recalcula balance) ----
+        var summaryAfter = await _db.vw_OrderSummary
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.OrderId == dto.OrderId);
+
+        if (summaryAfter != null)
         {
-            orderId = order.OrderId,
-            customerId = customer.CustomerId,
-            totalAmount = total,
-            message = "Order created.",
-            summaryUrl = $"/api/orders/summary?phone={customer.Phone}"
+            if (summaryAfter.Balance <= 0.0001m)
+            {
+                // Solo cierra si no está cerrado ya
+                if (!string.Equals(order.Status, "CLOSED", StringComparison.OrdinalIgnoreCase))
+                {
+                    order.Status = "CLOSED";
+                    await _db.SaveChangesAsync();
+                }
+            }
+        }
+
+        // Devuelve el resumen actualizado para el frontend
+        return Created($"/api/payments/{payment.PaymentId}", new
+        {
+            payment,
+            orderSummary = summaryAfter
         });
     }
+
+   
+
+    [HttpPatch("{id:long}/close")]
+    public async Task<IActionResult> CloseOrder(long id)
+    {
+        var order = await _db.Orders.FirstOrDefaultAsync(o => o.OrderId == id);
+        if (order is null) return NotFound();
+
+        // Reglas simples: solo cerrar si está pagado
+        var summary = await _db.vw_OrderSummary
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.OrderId == id);
+
+        if (summary is null)
+            return BadRequest("Order summary not found.");
+
+        if (summary.Balance > 0)
+            return BadRequest($"Cannot close order. Balance pending: {summary.Balance}");
+
+        order.Status = "CLOSED";
+        await _db.SaveChangesAsync();
+
+        // Devuelve resumen actualizado
+        var updated = await _db.vw_OrderSummary
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.OrderId == id);
+
+        if (updated == null)
+        {
+            return Ok(new
+            {
+                orderId = id,
+                status = "CLOSED"
+            });
+        }
+
+        return Ok(updated);
+
+
+    }
+
+
 }

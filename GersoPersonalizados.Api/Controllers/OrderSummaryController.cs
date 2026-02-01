@@ -22,30 +22,41 @@ public class OrderSummaryController : ControllerBase
         [FromQuery] string? status,
         [FromQuery] DateTime? from,
         [FromQuery] DateTime? to,
-        [FromQuery] bool openOnly = false)
+        [FromQuery] bool openOnly = false,
+        [FromQuery] int take = 200)
     {
-        // Ajusta el nombre del DbSet si en tu DbContext se llama distinto:
-        // puede ser VwOrderSummary o vw_OrderSummary dependiendo del scaffold
+        if (take is < 1 or > 500) take = 200;
+
         var query = _db.vw_OrderSummary.AsNoTracking().AsQueryable();
 
         if (!string.IsNullOrWhiteSpace(phone))
-            query = query.Where(x => x.Phone == phone);
+        {
+            var p = phone.Trim();
+            query = query.Where(x => x.Phone == p);
+        }
 
         if (!string.IsNullOrWhiteSpace(status))
-            query = query.Where(x => x.Status == status);
+        {
+            var s = status.Trim().ToUpperInvariant();
+            query = query.Where(x => x.Status == s);
+        }
 
         if (from.HasValue)
             query = query.Where(x => x.CreatedAt >= from.Value);
 
         if (to.HasValue)
-            query = query.Where(x => x.CreatedAt <= to.Value);
+        {
+            // incluye todo el día "to"
+            var end = to.Value.Date.AddDays(1).AddTicks(-1);
+            query = query.Where(x => x.CreatedAt <= end);
+        }
 
         if (openOnly)
             query = query.Where(x => x.Balance > 0);
 
         var result = await query
             .OrderByDescending(x => x.CreatedAt)
-            .Take(200) // límite seguro para swagger
+            .Take(take)
             .ToListAsync();
 
         return Ok(result);
