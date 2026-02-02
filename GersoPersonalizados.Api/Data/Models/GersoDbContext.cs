@@ -25,6 +25,7 @@ public partial class GersoDbContext : DbContext
 
     public virtual DbSet<vw_OrderSummary> vw_OrderSummary { get; set; }
 
+    public DbSet<ProductVariants> ProductVariants => Set<ProductVariants>();
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Customers>(entity =>
@@ -152,6 +153,23 @@ public partial class GersoDbContext : DbContext
         });
 
         OnModelCreatingPartial(modelBuilder);
+
+        modelBuilder.Entity<ProductVariants>(entity =>
+        {
+            entity.HasKey(e => e.VariantId);
+
+            entity.Property(e => e.Name)
+                .IsRequired()
+                .HasMaxLength(100);
+
+            entity.Property(e => e.Price)
+                .HasColumnType("decimal(18,2)");
+
+            entity.HasOne(d => d.Product)
+                .WithMany(p => p.ProductVariants)
+                .HasForeignKey(d => d.ProductId)
+                .OnDelete(DeleteBehavior.ClientSetNull);
+        });
     }
 
     partial void OnModelCreatingPartial(ModelBuilder modelBuilder);

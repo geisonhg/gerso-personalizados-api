@@ -13,4 +13,5 @@ public class Products
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public bool IsActive { get; set; } = true;
     public ICollection<OrderItems> OrderItems { get; set; } = new List<OrderItems>();
+    public virtual ICollection<ProductVariants> ProductVariants { get; set; } = new List<ProductVariants>();
 }
