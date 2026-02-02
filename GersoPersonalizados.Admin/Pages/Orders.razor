@@ -1,0 +1,102 @@
+﻿@page "/orders"
+@using System.Net.Http.Json
+@inject HttpClient Http
+@inject NavigationManager Nav
+
+<h3>Orders</h3>
+
+<div style="display:flex; gap:12px; align-items:end; margin-bottom:12px;">
+    <div>
+        <label>Search (name/phone)</label><br />
+        <input @bind="q" @bind:event="oninput" />
+    </div>
+
+    <div>
+        <label>Status</label><br />
+        <select @bind="status">
+            <option value="">ALL</option>
+            <option value="NEW">NEW</option>
+            <option value="CLOSED">CLOSED</option>
+        </select>
+    </div>
+
+    <div>
+        <label>Open only</label><br />
+        <input type="checkbox" @bind="openOnly" />
+    </div>
+
+    <button @onclick="Load">Search</button>
+</div>
+
+@if (rows is null)
+{
+    <p>Loading...</p>
+}
+else
+{
+    <table class="table">
+        <thead>
+        <tr>
+            <th>Id</th>
+            <th>Date</th>
+            <th>Customer</th>
+            <th>Phone</th>
+            <th>Status</th>
+            <th>Total</th>
+            <th>Paid</th>
+            <th>Balance</th>
+            <th></th>
+        </tr>
+        </thead>
+        <tbody>
+        @foreach (var r in rows)
+        {
+            <tr>
+                <td>@r.OrderId</td>
+                <td>@r.CreatedAt</td>
+                <td>@r.FullName</td>
+                <td>@r.Phone</td>
+                <td>@r.Status</td>
+                <td>@r.TotalAmount</td>
+                <td>@r.PaidAmount</td>
+                <td>@r.Balance</td>
+                <td>
+                        <button @onclick='() => Nav.NavigateTo($"/orders/{r.OrderId}")'>View</button>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
+@code {
+    string? q;
+    string? status;
+    bool openOnly = true;
+
+    List<OrderSummaryRow>? rows;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Load();
+    }
+
+    async Task Load()
+    {
+        rows = null;
+        var url = $"api/orders/summary?q={Uri.EscapeDataString(q ?? "")}&status={status}&openOnly={openOnly}&take=200";
+        rows = await Http.GetFromJsonAsync<List<OrderSummaryRow>>(url);
+    }
+
+    public class OrderSummaryRow
+    {
+        public long OrderId { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public string FullName { get; set; } = "";
+        public string Phone { get; set; } = "";
+        public string Status { get; set; } = "";
+        public decimal TotalAmount { get; set; }
+        public decimal PaidAmount { get; set; }
+        public decimal Balance { get; set; }
+    }
+}

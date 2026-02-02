@@ -16,9 +16,10 @@ public class OrderSummaryController : ControllerBase
     }
 
     // GET: /api/orders/summary?phone=3001234567&status=NEW&from=2026-01-01&to=2026-01-31&openOnly=true
+    // GET /api/orders/summary?q=ana&openOnly=true&take=200
     [HttpGet("summary")]
     public async Task<IActionResult> GetSummary(
-        [FromQuery] string? phone,
+        [FromQuery] string? q,
         [FromQuery] string? status,
         [FromQuery] DateTime? from,
         [FromQuery] DateTime? to,
@@ -29,10 +30,10 @@ public class OrderSummaryController : ControllerBase
 
         var query = _db.vw_OrderSummary.AsNoTracking().AsQueryable();
 
-        if (!string.IsNullOrWhiteSpace(phone))
+        if (!string.IsNullOrWhiteSpace(q))
         {
-            var p = phone.Trim();
-            query = query.Where(x => x.Phone == p);
+            var term = q.Trim();
+            query = query.Where(x => x.Phone.Contains(term) || x.FullName.Contains(term));
         }
 
         if (!string.IsNullOrWhiteSpace(status))
@@ -46,7 +47,6 @@ public class OrderSummaryController : ControllerBase
 
         if (to.HasValue)
         {
-            // incluye todo el día "to"
             var end = to.Value.Date.AddDays(1).AddTicks(-1);
             query = query.Where(x => x.CreatedAt <= end);
         }

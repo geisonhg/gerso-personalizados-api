@@ -1,0 +1,309 @@
+﻿@page "/orders/{Id:long}"
+@using System.Net.Http.Json
+@inject HttpClient Http
+@inject NavigationManager Nav
+
+<h3>Order Detail - @Id</h3>
+
+@if (!string.IsNullOrWhiteSpace(error))
+{
+    <div style="color:red; margin:10px 0;">@error</div>
+}
+
+@if (vm is null)
+{
+    <p>Loading...</p>
+}
+else
+{
+    <div style="margin-bottom: 14px;">
+        <div><b>Customer:</b> @vm.Customer.FullName (@vm.Customer.Phone)</div>
+        <div><b>Status:</b> @vm.Status</div>
+        <div><b>Delivery:</b> @vm.DeliveryType</div>
+        <div><b>Total:</b> @vm.TotalAmount</div>
+
+        <div style="margin-top:6px;">
+            <div><b>Paid:</b> @PaidAmount</div>
+            <div><b>Balance:</b> @Balance</div>
+            <div><b>Notes:</b> @vm.Notes</div>
+        </div>
+
+        <div style="margin-top:10px;">
+            @if (CanClose)
+            {
+                <button @onclick="CloseOrder" disabled="@busy">Close Order</button>
+            }
+            else
+            {
+                <button disabled title="Balance must be 0 to close">Close Order</button>
+            }
+            <button style="margin-left:8px;" @onclick='() => Nav.NavigateTo("/orders")'>Back</button>
+        </div>
+    </div>
+
+    <h4>Items</h4>
+    <table class="table">
+        <thead>
+        <tr>
+            <th>Description</th>
+            <th>Qty</th>
+            <th>Unit</th>
+            <th>Line</th>
+        </tr>
+        </thead>
+        <tbody>
+        @foreach (var i in vm.Items)
+        {
+            <tr>
+                <td>@i.Description</td>
+                <td>@i.Qty</td>
+                <td>@i.UnitPrice</td>
+                <td>@(i.LineTotal ?? (i.UnitPrice * i.Qty))</td>
+            </tr>
+        }
+        </tbody>
+    </table>
+
+    <h4>Payments</h4>
+    <table class="table">
+        <thead>
+        <tr>
+            <th>Date</th>
+            <th>Amount</th>
+            <th>Method</th>
+            <th>Ref</th>
+        </tr>
+        </thead>
+        <tbody>
+        @foreach (var p in vm.Payments)
+        {
+            <tr>
+                <td>@p.PaidAt</td>
+                <td>@p.Amount</td>
+                <td>@p.Method</td>
+                <td>@p.Reference</td>
+            </tr>
+        }
+        </tbody>
+    </table>
+
+    <h4>Add Payment</h4>
+
+    @if (IsClosed)
+    {
+        <div style="color: gray;">Order is CLOSED. No more payments allowed.</div>
+    }
+    else
+    {
+        <div style="display:flex; gap:12px; align-items:end;">
+            <div>
+                <label>Amount</label><br />
+                <input type="number" @bind="payAmount" />
+            </div>
+
+            <div>
+                <label>Method</label><br />
+                <select @bind="payMethod">
+                    <option value="CASH">CASH</option>
+                    <option value="NEQUI">NEQUI</option>
+                    <option value="DAVIPLATA">DAVIPLATA</option>
+                    <option value="TRANSFER">TRANSFER</option>
+                </select>
+            </div>
+
+            <div>
+                <label>Reference</label><br />
+                <input @bind="payRef" />
+            </div>
+
+            <button @onclick="AddPayment" disabled="@busy">Guardar abono</button>
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public long Id { get; set; }
+
+    OrderDetailVm? vm;
+    string? error;
+    bool busy;
+
+    decimal payAmount = 0;
+    string payMethod = "CASH";
+    string? payRef;
+
+    decimal PaidAmount => vm?.Summary?.PaidAmount ?? vm?.Payments?.Sum(p => p.Amount) ?? 0m;
+    decimal Balance => vm?.Summary?.Balance ?? Math.Max(0m, (vm?.TotalAmount ?? 0m) - PaidAmount);
+
+    bool IsClosed => string.Equals(vm?.Status, "CLOSED", StringComparison.OrdinalIgnoreCase);
+    bool CanClose => vm is not null && !IsClosed && Balance <= 0.0001m;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await Load();
+    }
+
+    async Task Load()
+    {
+        try
+        {
+            error = null;
+            vm = await Http.GetFromJsonAsync<OrderDetailVm>($"api/orders/{Id}");
+            if (vm is null) error = "Order not found.";
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+    }
+
+    async Task AddPayment()
+    {
+        if (vm is null) return;
+
+        if (payAmount <= 0)
+        {
+            error = "Amount must be > 0.";
+            return;
+        }
+
+        // regla UI para evitar 400
+        if (payAmount > Balance)
+        {
+            error = $"Amount cannot exceed balance ({Balance}).";
+            return;
+        }
+
+        busy = true;
+        error = null;
+
+        try
+        {
+            var dto = new CreatePaymentDto
+            {
+                OrderId = Id,
+                Amount = payAmount,
+                Method = payMethod,
+                Reference = string.IsNullOrWhiteSpace(payRef) ? null : payRef
+            };
+
+            var resp = await Http.PostAsJsonAsync("api/payments", dto);
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                error = await resp.Content.ReadAsStringAsync();
+                return;
+            }
+
+            // Reset inputs
+            payAmount = 0;
+            payMethod = "CASH";
+            payRef = null;
+
+            // Reload (trae pagos + summary + status cerrado si aplica)
+            await Load();
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    async Task CloseOrder()
+    {
+        if (vm is null) return;
+
+        if (!CanClose)
+        {
+            error = "Cannot close. Balance must be 0.";
+            return;
+        }
+
+        busy = true;
+        error = null;
+
+        try
+        {
+            var resp = await Http.PatchAsync($"api/orders/{Id}/close", null);
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                error = await resp.Content.ReadAsStringAsync();
+                return;
+            }
+
+            await Load();
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    // DTOs para el Admin (match con tu GET /api/orders/{id})
+    public class OrderDetailVm
+    {
+        public long OrderId { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public string Status { get; set; } = "";
+        public string DeliveryType { get; set; } = "";
+        public decimal TotalAmount { get; set; }
+        public string? Notes { get; set; }
+
+        public CustomerVm Customer { get; set; } = new();
+        public List<ItemVm> Items { get; set; } = new();
+        public List<PaymentVm> Payments { get; set; } = new();
+
+        public SummaryVm? Summary { get; set; }
+    }
+
+    public class CustomerVm
+    {
+        public int CustomerId { get; set; }
+        public string FullName { get; set; } = "";
+        public string Phone { get; set; } = "";
+    }
+
+    public class ItemVm
+    {
+        public long OrderItemId { get; set; }
+        public string Description { get; set; } = "";
+        public int Qty { get; set; }
+        public decimal UnitPrice { get; set; }
+        public decimal? LineTotal { get; set; }
+        public string? Notes { get; set; }
+    }
+
+    public class PaymentVm
+    {
+        public int PaymentId { get; set; }
+        public DateTime PaidAt { get; set; }
+        public decimal Amount { get; set; }
+        public string Method { get; set; } = "";
+        public string? Reference { get; set; }
+        public string? Notes { get; set; }
+    }
+
+    public class SummaryVm
+    {
+        public long OrderId { get; set; }
+        public decimal PaidAmount { get; set; }
+        public decimal Balance { get; set; }
+    }
+
+    public class CreatePaymentDto
+    {
+        public long OrderId { get; set; }
+        public decimal Amount { get; set; }
+        public string Method { get; set; } = "CASH";
+        public string? Reference { get; set; }
+    }
+}
