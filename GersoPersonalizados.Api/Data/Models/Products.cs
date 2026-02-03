@@ -3,17 +3,15 @@ using System.Collections.Generic;
 
 namespace GersoPersonalizados.Api.Data.Models;
 
-public partial class Products
+public class Products
 {
     public int ProductId { get; set; }
 
-    public string Name { get; set; } = null!;
+    public string Name { get; set; } = "";
 
-    public decimal? BasePrice { get; set; }
-
-    public bool IsActive { get; set; }
-
-    public DateTime CreatedAt { get; set; }
-
-    public virtual ICollection<OrderItems> OrderItems { get; set; } = new List<OrderItems>();
+    public decimal BasePrice { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public bool IsActive { get; set; } = true;
+    public ICollection<OrderItems> OrderItems { get; set; } = new List<OrderItems>();
+    public virtual ICollection<ProductVariants> ProductVariants { get; set; } = new List<ProductVariants>();
 }
