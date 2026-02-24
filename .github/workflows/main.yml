@@ -1,0 +1,62 @@
+name: CI (.NET)
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main", "develop" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build_test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/packages.lock.json', '**/Directory.Packages.props') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore
+        run: dotnet restore
+
+      # Recomendado: te fuerza a mantener estilo consistente (si tienes .editorconfig)
+      - name: Format check
+        run: dotnet format --verify-no-changes
+        continue-on-error: false
+
+      - name: Build (Release)
+        run: dotnet build --no-restore -c Release
+
+      - name: Test + Coverage
+        run: dotnet test --no-build -c Release --collect:"XPlat Code Coverage" --logger "trx;LogFileName=test-results.trx"
+
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            **/TestResults/**/*.trx
+
+      - name: Upload Coverage Files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            **/TestResults/**/coverage.cobertura.xml
